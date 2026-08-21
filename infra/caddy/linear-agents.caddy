@@ -1,4 +1,4 @@
-# Append to /etc/caddy/Caddyfile on contabo-tally, then `caddy reload`.
+# Append to /etc/caddy/Caddyfile on contabo-tally, then `systemctl reload caddy`.
 # Requires an A record: linear-agents.ai-agentic-enterprises.com -> 169.58.69.167
 
 linear-agents.ai-agentic-enterprises.com {
@@ -11,19 +11,32 @@ linear-agents.ai-agentic-enterprises.com {
 		-Server
 	}
 
-	# Only Linear should ever POST here, and it only ever POSTs to /webhook.
-	# Everything else gets a flat 404 rather than reaching the Node process.
+	# Linear's AgentSessionEvent deliveries. Linear gives the receiver 5 seconds,
+	# so fail fast and let it retry on its own schedule (1m / 1h / 6h) rather than
+	# holding the connection open past the budget.
 	@webhook path /webhook
 	handle @webhook {
 		reverse_proxy 127.0.0.1:3001 {
-			# Linear gives the receiver 5 seconds. Fail fast and let Linear retry
-			# on its own schedule rather than holding the connection open.
 			transport http {
 				response_header_timeout 4s
 			}
 		}
 	}
 
+	# The install flow. Visited by a human in a browser, once, and Linear redirects
+	# back to /oauth/callback. No timeout squeeze here — the callback does a token
+	# exchange against Linear and is allowed to take its time.
+	@oauth path /oauth/*
+	handle @oauth {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	@health path /healthz
+	handle @health {
+		reverse_proxy 127.0.0.1:3001
+	}
+
+	# Everything else never reaches the Node process.
 	handle {
 		respond "Not found" 404
 	}
