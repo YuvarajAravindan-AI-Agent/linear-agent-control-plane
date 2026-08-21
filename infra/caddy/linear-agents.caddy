@@ -1,0 +1,35 @@
+# Append to /etc/caddy/Caddyfile on contabo-tally, then `caddy reload`.
+# Requires an A record: linear-agents.ai-agentic-enterprises.com -> 169.58.69.167
+
+linear-agents.ai-agentic-enterprises.com {
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Only Linear should ever POST here, and it only ever POSTs to /webhook.
+	# Everything else gets a flat 404 rather than reaching the Node process.
+	@webhook path /webhook
+	handle @webhook {
+		reverse_proxy 127.0.0.1:3001 {
+			# Linear gives the receiver 5 seconds. Fail fast and let Linear retry
+			# on its own schedule rather than holding the connection open.
+			transport http {
+				response_header_timeout 4s
+			}
+		}
+	}
+
+	handle {
+		respond "Not found" 404
+	}
+
+	log {
+		output file /var/log/caddy/linear-agents.log
+		format json
+	}
+}

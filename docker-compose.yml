@@ -1,0 +1,18 @@
+services:
+  control-plane:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./data:/app/data
+    # Every container on contabo-tally gets a mem_limit so this stack dies alone
+    # instead of the OOM killer taking mongo-demo with it.
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/webhook',{method:'POST'}).then(r=>process.exit(r.status===401?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
