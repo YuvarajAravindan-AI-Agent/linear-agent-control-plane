@@ -6,6 +6,11 @@ services:
     ports:
       - "127.0.0.1:3001:3000"
     volumes:
+      # The image runs as `node` (uid 1000) and this bind mount shadows the
+      # chown done in the Dockerfile, so the HOST directory's ownership is what
+      # counts. A root-owned ./data fails with a bare "unable to open database
+      # file" that says nothing about permissions:
+      #   mkdir -p data && chown -R 1000:1000 data
       - ./data:/app/data
     # Every container on contabo-tally gets a mem_limit so this stack dies alone
     # instead of the OOM killer taking mongo-demo with it.

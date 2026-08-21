@@ -72,6 +72,27 @@ npm test
 flag is unnecessary from Node 24. `better-sqlite3` was tried first and **segfaults on
 Node 22.9**, including when rebuilt from source — hence the built-in.
 
+## Deploying
+
+```bash
+cp .env.example .env          # fill LINEAR_WEBHOOK_SECRET from the Linear app page
+mkdir -p data && chown -R 1000:1000 data
+docker compose up -d
+```
+
+The `chown` is not optional. The image runs as `node` (uid 1000), and the bind mount
+shadows the Dockerfile's `chown`, so the **host** directory's ownership decides. Get it
+wrong and `node:sqlite` reports a bare `unable to open database file` with nothing about
+permissions in it.
+
+Put a reverse proxy in front that exposes **only** `/webhook` — see
+[`infra/caddy/linear-agents.caddy`](infra/caddy/linear-agents.caddy). Its
+`response_header_timeout` is 4s, deliberately inside Linear's 5s budget: fail fast and let
+Linear retry on its own schedule rather than holding the connection open.
+
+Verified live: unsigned `POST /webhook` → 401, correctly signed → 200 in ~21ms, and a
+duplicate delivery → 200 with exactly one row in the database.
+
 ## Roadmap
 
 - [x] Ack-then-queue receiver, signature + replay verification, durable dedupe, recovery
