@@ -56,9 +56,13 @@ export function createApp(opts: AppOptions) {
     // A missing client secret disables installation but must NOT take webhook
     // ingress down with it. Degrade the feature that cannot work, keep serving
     // the one that can.
-    if (url.pathname.startsWith("/oauth/") && !opts.oauth.clientSecret) {
+    if (url.pathname.startsWith("/oauth/") && (!opts.oauth.clientId || !opts.oauth.clientSecret)) {
+      const missing = [
+        opts.oauth.clientId ? null : "LINEAR_CLIENT_ID",
+        opts.oauth.clientSecret ? null : "LINEAR_CLIENT_SECRET",
+      ].filter(Boolean).join(" and ");
       return html(res, 503,
-        "<h1>Not configured</h1><p>Set <code>LINEAR_CLIENT_SECRET</code> and restart to enable installation.</p>");
+        `<h1>Not configured</h1><p>Set <code>${missing}</code> and restart to enable installation.</p>`);
     }
 
     // Kicks off installation. Visited by a human in a browser, once.

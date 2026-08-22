@@ -9,7 +9,8 @@
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node --experimental-sqlite --test 'dist/test/**/*.test.js'",
-    "receiver": "npm run build && node --experimental-sqlite dist/src/receiver.js"
+    "receiver": "npm run build && node --experimental-sqlite dist/src/receiver.js",
+    "start": "npm run build && node --experimental-sqlite --env-file=.env dist/src/main.js"
   },
   "license": "MIT",
   "private": true,

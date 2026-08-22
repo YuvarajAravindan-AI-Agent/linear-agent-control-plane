@@ -24,12 +24,14 @@ function required(name: string): string {
 }
 
 const webhookSecret = required("LINEAR_WEBHOOK_SECRET");
-const clientId = required("LINEAR_CLIENT_ID");
 const baseUrl = required("PUBLIC_BASE_URL").replace(/\/$/, "");
 
-// Deliberately NOT required: without it only installation is unavailable, and
-// taking webhook ingress down over a feature nobody is currently using would be
-// the worse failure. /oauth/* answers 503 with the reason instead.
+// Neither OAuth credential is required. Without them only *installation* is
+// unavailable; webhook ingress and /status keep serving and /oauth/* answers 503
+// naming what is missing. Taking a working endpoint down over a feature nobody is
+// currently using is the worse failure — and it is what makes a local run possible
+// with no Linear app at all.
+const clientId = process.env.LINEAR_CLIENT_ID ?? "";
 const clientSecret = process.env.LINEAR_CLIENT_SECRET ?? "";
 
 const port = Number(process.env.PORT ?? 3000);
@@ -59,8 +61,8 @@ const server = startApp({
 });
 
 console.log(`listening on :${port}  mode=${mode}  db=${dbPath}`);
-if (!clientSecret) {
-  console.warn("LINEAR_CLIENT_SECRET not set — webhook ingress is live, installation is not");
+if (!clientId || !clientSecret) {
+  console.warn("OAuth credentials not set — webhook ingress and /status are live, installation is not");
 } else {
   console.log(
     tokens.getToken()
