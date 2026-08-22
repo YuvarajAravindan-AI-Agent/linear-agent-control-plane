@@ -1,7 +1,7 @@
 {
   "name": "linear-agent-control-plane",
   "version": "0.1.0",
-  "description": "Linear as the control plane for parallel AI coding agents — reference implementation",
+  "description": "Linear as the control plane for parallel AI coding agents \u2014 reference implementation",
   "type": "module",
   "engines": {
     "node": ">=22.5"
@@ -12,7 +12,7 @@
     "receiver": "npm run build && node --experimental-sqlite dist/src/receiver.js",
     "start": "npm run build && node --experimental-sqlite --env-file=.env dist/src/main.js"
   },
-  "license": "MIT",
+  "license": "Apache-2.0",
   "private": true,
   "devDependencies": {
     "@types/node": "^26.2.0",

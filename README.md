@@ -6,7 +6,7 @@ Linear as the control plane for parallel AI coding agents — a reference implem
 decomposes into dependency-ordered sub-issues and stops at a human review gate. **No model
 is called and nothing is spent.**
 
-This is a reference implementation, not delivered client work. See
+Apache-2.0 licensed. This is a reference implementation, not delivered client work. See
 [What this does not prove](#what-this-does-not-prove).
 
 ---
