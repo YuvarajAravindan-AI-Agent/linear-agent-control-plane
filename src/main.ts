@@ -4,6 +4,7 @@ import { startApp } from "./app.js";
 import { LinearEmitter } from "./activity.js";
 import { Consumer } from "./consumer.js";
 import { replayWorker } from "./worker.js";
+import { LinearClient } from "./linear.js";
 
 /**
  * Service entrypoint: webhook ingress plus the OAuth install endpoints.
@@ -49,6 +50,7 @@ const server = startApp({
   events,
   tokens,
   port,
+  mode,
   oauth: {
     clientId,
     clientSecret,
@@ -76,10 +78,12 @@ if (!clientSecret) {
  * a model. Keeping that split is what lets the whole control plane be demonstrated
  * against real Linear at zero cost.
  */
+const linear = new LinearClient(() => tokens.getToken()?.accessToken);
+
 const consumer = new Consumer({
   store: events,
   emitter: new LinearEmitter(() => tokens.getToken()?.accessToken),
-  worker: replayWorker(),
+  worker: replayWorker(linear),
 });
 
 const POLL_MS = 2_000;

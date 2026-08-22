@@ -3,7 +3,7 @@ import type { ActivityEmitter } from "./activity.js";
 
 export interface SessionEvent {
   action: "created" | "prompted";
-  agentSession: { id: string };
+  agentSession: { id: string; issue?: { id: string; identifier?: string } };
   /** Prompt text, per Linear's interaction model. */
   promptContext?: string;
   agentActivity?: { body?: string };

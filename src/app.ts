@@ -3,6 +3,7 @@ import { EventStore } from "./store.js";
 import { TokenStore } from "./tokens.js";
 import { createReceiver } from "./receiver.js";
 import { buildAuthorizeUrl, exchangeCode, type OAuthConfig, type FetchLike } from "./oauth.js";
+import { renderStatus } from "./status.js";
 
 export interface AppOptions {
   webhookSecret: string;
@@ -11,6 +12,8 @@ export interface AppOptions {
   oauth: OAuthConfig;
   now?: () => number;
   doFetch?: FetchLike;
+  /** Shown on the status page so a reader knows whether a model is in the loop. */
+  mode?: string;
 }
 
 function html(res: ServerResponse, status: number, body: string): void {
@@ -32,6 +35,16 @@ export function createApp(opts: AppOptions) {
     const url = new URL(req.url ?? "/", "http://localhost");
 
     if (url.pathname === "/webhook") return handleWebhook(req, res);
+
+    if ((url.pathname === "/status" || url.pathname === "/") && req.method === "GET") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+        .end(renderStatus(opts.events, {
+          installed: opts.tokens.getToken() !== undefined,
+          mode: opts.mode ?? "replay",
+          now: now(),
+        }));
+      return;
+    }
 
     if (url.pathname === "/healthz" && req.method === "GET") {
       const installed = opts.tokens.getToken() !== undefined;

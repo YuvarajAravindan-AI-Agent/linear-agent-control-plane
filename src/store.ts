@@ -95,6 +95,32 @@ export class EventStore {
     return Number(res.changes);
   }
 
+  /** Newest first, for the status page. Session and action come out of the payload. */
+  recent(limit = 25, _now = Date.now()): Array<{
+    id: string; state: EventState; received_at: number; attempts: number;
+    session: string; action: string;
+  }> {
+    const rows = this.db
+      .prepare(
+        "SELECT id, state, received_at, attempts, payload FROM events ORDER BY received_at DESC LIMIT ?",
+      )
+      .all(limit) as Array<{
+        id: string; state: EventState; received_at: number; attempts: number; payload: string;
+      }>;
+
+    return rows.map((r) => {
+      let session = r.id;
+      let action = "";
+      try {
+        const p = JSON.parse(r.payload) as { action?: string; agentSession?: { issue?: { identifier?: string } } };
+        action = p.action ?? "";
+        // Prefer the human-readable issue key over the session uuid.
+        session = p.agentSession?.issue?.identifier ?? r.id.split(":")[0] ?? r.id;
+      } catch { /* keep the raw id */ }
+      return { id: r.id, state: r.state, received_at: Number(r.received_at), attempts: Number(r.attempts), session, action };
+    });
+  }
+
   count(state?: EventState): number {
     const row = state
       ? (this.db
