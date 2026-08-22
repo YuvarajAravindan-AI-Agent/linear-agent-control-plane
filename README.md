@@ -127,6 +127,7 @@ Front it with a reverse proxy that exposes only the four paths above — see
 let it retry, rather than holding the connection open.
 
 Operational detail, gotchas and a candid **Known gaps** list: [RUNBOOK.md](RUNBOOK.md).
+Architecture, HLD/LLD with diagrams and alternatives considered: [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Roadmap
 
