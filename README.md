@@ -2,62 +2,99 @@
 
 Linear as the control plane for parallel AI coding agents — a reference implementation.
 
-**Status: early.** The webhook ingress layer is built and tested. The orchestrator,
-dependency graph, human review gate and dashboards are not written yet. See
-[Roadmap](#roadmap).
+**Running live against a real Linear workspace.** Delegate an issue to the app user and it
+decomposes into dependency-ordered sub-issues and stops at a human review gate. **No model
+is called and nothing is spent.**
 
-This is a reference implementation, not delivered client work.
+This is a reference implementation, not delivered client work. See
+[What this does not prove](#what-this-does-not-prove).
 
 ---
 
-## The constraint this is built around
-
-Linear's agent API gives you two budgets:
+## The constraint the whole thing is built around
 
 | Requirement | Budget |
 |---|---|
 | Webhook receiver must return | **5 seconds** |
-| `created` session must see a `thought` activity | **10 seconds** |
-| Retry schedule on failure | 1 min, 1 hour, 6 hours (3 attempts, then the webhook may be disabled) |
+| A `created` session must show an activity | **10 seconds** |
+| Retry schedule on failure | 1 min, 1 hour, 6 hours — then the webhook may be disabled |
 
-A coding agent takes minutes. **So the work cannot happen in the webhook handler** — and
-that isn't an implementation detail, it's the architecture. It forces four things:
+A coding agent takes minutes. **So the work cannot happen in the webhook handler**, and
+that isn't an implementation detail — it's the architecture. It forces four things:
 
 1. **Ack-then-queue.** [`src/receiver.ts`](src/receiver.ts) reads the raw body, verifies,
    claims, responds. It never awaits a model call or a Linear mutation.
-2. **A holding activity** emitted from the consumer inside the 10s window, before any
-   model call.
-3. **Idempotency on delivery**, because retries are real and a double delivery must not
-   dispatch two agents at one work package.
-4. **Durable state** under concurrent writes from N agents.
+2. **A holding activity emitted before the work**, not after — see
+   [`src/consumer.ts`](src/consumer.ts). There is a test that runs a 240-second worker and
+   asserts the first activity still landed inside 10s.
+3. **Idempotency on delivery**, because retries are real.
+4. **Durable state** under concurrent writes.
 
-## Two findings worth the reading time
+## Four findings worth the reading time
 
-**Durable dedupe is not optional, and the retry schedule is why.** Retries land at 1
-minute, 1 hour and **6 hours**. An in-process `Set` or LRU passes every fast-redelivery
-test, then dispatches a second agent at the same work package six hours later — after a
-deploy has cycled the process. There is a test for exactly this in
-[`test/receiver.test.ts`](test/receiver.test.ts) that fails against an in-memory dedupe
-and passes against the SQLite one.
+**Durable dedupe is not optional, and the retry schedule is why.** Retries land at 1 minute,
+1 hour and **6 hours**. An in-process `Set` passes every fast-redelivery test, then
+dispatches a second agent at the same work package six hours later, after a deploy has
+cycled the process. There is a test that fails against in-memory dedupe and passes against
+SQLite.
 
-**Verify the raw bytes, never re-stringified JSON.** The hazard is *not* key ordering —
-`JSON.stringify(JSON.parse(x))` preserves string-key insertion order, so a key-order
-example passes by accident and teaches the wrong lesson. The real hazards are whitespace
-and number formatting: `{"a": 1.0}` round-trips to `{"a":1}` and the signature breaks.
+**Verify raw bytes, never re-stringified JSON.** The hazard is *not* key ordering —
+`JSON.stringify(JSON.parse(x))` preserves string-key insertion order, so a key-order example
+passes by accident and teaches the wrong lesson. The real hazards are whitespace and number
+formatting: `{"a": 1.0}` round-trips to `{"a":1}` and the HMAC breaks.
+
+**`elicitation` vs `response` is load-bearing.** An `elicitation` drives the session to
+`awaitingInput` — that *is* the human review gate. Emitting `response` instead marks the
+session complete and silently skips review.
+
+**Most of a control plane needs no model at all.** Dependency ordering, dispatch, the gate,
+escalation and the status page are ordinary distributed-systems code. That is why `MODE`
+selects the *worker*, not the emitter, and why the default mode is free.
 
 ## What is actually verified
 
-`npm test` — 18 tests, no network, no API keys, no Anthropic calls.
+`npm test` — **87 tests, no network, no API keys, no model calls.**
 
 ```
 p99=13.1ms  median=4.4ms      # handler latency vs Linear's 5000ms budget
-tests 18 | pass 18 | fail 0
+tests 87 | pass 87 | fail 0
 ```
 
-Covered: signature verification over raw bytes (including the length-mismatch case that
-makes `timingSafeEqual` throw), two-sided replay guard, event identity, duplicate delivery
-answering 200 while dispatching once, handler p99 under load, dedupe surviving a process
-restart, and a consumer killed mid-run recovering instead of stranding the session.
+Verified live against a real workspace: unsigned `POST /webhook` → 401, correctly signed →
+200 in ~21 ms, duplicate delivery → 200 with exactly one row, and an epic delegated to the
+app user decomposed into four sub-issues with the `blocks` relations forming a diamond.
+
+## How to use it
+
+Put a `## Work packages` block in an epic's description:
+
+```markdown
+## Work packages
+- [A] Payment provider adapter
+- [B] Cart totals service (depends: A)
+- [C] Fraud checks (depends: A)
+- [D] Checkout UI (depends: B, C)
+```
+
+Delegate the issue to the app user. It creates each package as a real sub-issue, mirrors the
+edges as Linear `blocks` relations, and opens the review gate on the plan. **Nothing is
+dispatched until a human approves.**
+
+The graph is validated *before* anything is written — a cycle or an unknown dependency id
+fails as a parse error, not as four orphaned sub-issues someone cleans up by hand.
+
+In replay mode the decomposition is a **parser, not a planner**. That is deliberate: it is
+the one part that genuinely needs a model, so replay mode reads a spec you wrote rather than
+inventing one.
+
+## Endpoints
+
+| Path | Purpose |
+|---|---|
+| `POST /webhook` | Linear `AgentSessionEvent` ingress |
+| `GET /oauth/authorize` · `/oauth/callback` | one-time install as an app user |
+| `GET /status` | founder-readable progress — no JS, no build step |
+| `GET /healthz` | `{"ok":true,"installed":true}` |
 
 ## Running it
 
@@ -68,57 +105,55 @@ npm install
 npm test
 ```
 
-`node:sqlite` needs `--experimental-sqlite` on Node 22 (already in the npm scripts); the
-flag is unnecessary from Node 24. `better-sqlite3` was tried first and **segfaults on
-Node 22.9**, including when rebuilt from source — hence the built-in.
+`node:sqlite` needs `--experimental-sqlite` on Node 22 (already in the npm scripts); it is
+unflagged from Node 24. `better-sqlite3` was tried first and **segfaults on Node 22.9**,
+including rebuilt from source — hence the built-in.
 
 ## Deploying
 
 ```bash
-cp .env.example .env          # fill LINEAR_WEBHOOK_SECRET from the Linear app page
+cp .env.example .env          # fill from the Linear app page
 mkdir -p data && chown -R 1000:1000 data
 docker compose up -d
 ```
 
-The `chown` is not optional. The image runs as `node` (uid 1000), and the bind mount
-shadows the Dockerfile's `chown`, so the **host** directory's ownership decides. Get it
-wrong and `node:sqlite` reports a bare `unable to open database file` with nothing about
-permissions in it.
+The `chown` is not optional. The image runs as `node` (uid 1000) and the bind mount shadows
+the Dockerfile's `chown`, so the **host** directory decides. Get it wrong and `node:sqlite`
+reports a bare `unable to open database file` with nothing about permissions in it.
 
-Put a reverse proxy in front that exposes **only** `/webhook` — see
-[`infra/caddy/linear-agents.caddy`](infra/caddy/linear-agents.caddy). Its
-`response_header_timeout` is 4s, deliberately inside Linear's 5s budget: fail fast and let
-Linear retry on its own schedule rather than holding the connection open.
+Front it with a reverse proxy that exposes only the four paths above — see
+[`infra/caddy/linear-agents.caddy`](infra/caddy/linear-agents.caddy). The 4s
+`response_header_timeout` applies to `/webhook` only: fail fast inside Linear's budget and
+let it retry, rather than holding the connection open.
 
-Verified live: unsigned `POST /webhook` → 401, correctly signed → 200 in ~21ms, and a
-duplicate delivery → 200 with exactly one row in the database.
+Operational detail, gotchas and a candid **Known gaps** list: [RUNBOOK.md](RUNBOOK.md).
 
 ## Roadmap
 
 - [x] Ack-then-queue receiver, signature + replay verification, durable dedupe, recovery
-- [ ] Linear workspace: teams/projects/issue structure for work packages + dependencies
-- [ ] Agent app-user install (`actor=app`), OAuth, activity emission
-- [ ] Orchestrator: epic → dependency-ordered work packages → parallel dispatch
-- [ ] Human "understanding review" gate (`elicitation` → `awaitingInput`) with SLA + escalation
-- [ ] Notification architecture for several named humans in different roles
-- [ ] Founder-readable progress views
-- [ ] `replay` / `live` modes and the runbook
-
-**`replay` will be the default mode**: the whole control plane runs off recorded fixtures
-with zero token spend. `live` uses cheap workers behind concurrency and spend caps. Most
-of a control plane — dispatch, dependency ordering, the gate, escalation — needs no LLM at
-all, which is the more interesting claim anyway.
+- [x] OAuth install as an app user (`actor=app`), single-use durable state, token storage
+- [x] Agent session consumer: holding activity inside the 10s budget, then the work
+- [x] Epic → dependency-ordered work packages as real sub-issues with `blocks` relations
+- [x] Human "understanding review" gate (`elicitation` → `awaitingInput`) on stock Linear
+- [x] Founder-readable progress at `/status`
+- [x] Runbook
+- [ ] Orchestrator wired to real Linear transitions — approving a gate does not yet unblock dependents
+- [ ] OAuth token refresh — tokens last 24h; the refresh token is stored but unused
+- [ ] `live` mode — a model in the loop
 
 ## What this does not prove
 
-It does not prove operating this against a large production codebase with a real
-engineering team. It proves the control plane, the dispatch semantics and the failure
+It does not prove operating this against a large production codebase with a real engineering
+team. It proves the control plane, the dispatch semantics, the review gate and the failure
 handling.
 
-## Open question
+The orchestrator, dependency graph and escalation logic in `graph.ts`, `gate.ts` and
+`orchestrator.ts` are correct and tested, but are **not yet driven by real Linear state
+transitions** — approving a gate in Linear does not currently unblock dependents. That gap
+is listed in the roadmap and in the runbook rather than papered over.
 
-Whether **agent app-user installation** works on Linear's free plan is unverified. Free
-gives API + webhooks + 2 teams + 250 issues, and agents are documented as non-billable —
-but "not billable" is not the same claim as "installable on free". Creating an OAuth app
-requires workspace admin, which you have on your own workspace. This gets settled before
-anything is built on top of it.
+## Answered along the way
+
+**Agent app-users work on Linear's free plan.** Verified in the real UI, not inferred from
+docs: OAuth applications, webhooks and the `Agent session events` category are all available
+with no paywall, and `actor=app` installs the app as an assignable, mentionable user.

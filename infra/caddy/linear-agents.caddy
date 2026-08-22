@@ -36,6 +36,13 @@ linear-agents.ai-agentic-enterprises.com {
 		reverse_proxy 127.0.0.1:3001
 	}
 
+	# Founder-readable progress. Read-only and deliberately reachable without a
+	# login, since the point is that nobody has to ask an engineer.
+	@status path /status
+	handle @status {
+		reverse_proxy 127.0.0.1:3001
+	}
+
 	# Everything else never reaches the Node process.
 	handle {
 		respond "Not found" 404
