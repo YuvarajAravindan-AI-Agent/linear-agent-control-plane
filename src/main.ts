@@ -60,6 +60,20 @@ const server = startApp({
   },
 });
 
+// A port clash is the most common first-run failure and Node's default is an
+// unhandled 'error' event: a 20-line stack trace that buries the one useful word.
+server.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EADDRINUSE") {
+    console.error(
+      `port ${port} is already in use — another copy of this service is probably running.\n` +
+      `  find it:  lsof -i :${port}\n` +
+      `  or run on a different port:  PORT=3001 npm start`,
+    );
+    process.exit(1);
+  }
+  throw err;
+});
+
 console.log(`listening on :${port}  mode=${mode}  db=${dbPath}`);
 if (!clientId || !clientSecret) {
   console.warn("OAuth credentials not set — webhook ingress and /status are live, installation is not");
