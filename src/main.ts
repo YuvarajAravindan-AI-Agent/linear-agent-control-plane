@@ -1,6 +1,9 @@
 import { EventStore } from "./store.js";
 import { TokenStore } from "./tokens.js";
 import { startApp } from "./app.js";
+import { LinearEmitter } from "./activity.js";
+import { Consumer } from "./consumer.js";
+import { replayWorker } from "./worker.js";
 
 /**
  * Service entrypoint: webhook ingress plus the OAuth install endpoints.
@@ -64,9 +67,40 @@ if (!clientSecret) {
   );
 }
 
+/**
+ * Queue consumer.
+ *
+ * The emitter is ALWAYS the real Linear one — emitting activities is free, and a
+ * session that never hears back sits at "Working..." until it goes stale. `MODE`
+ * selects the worker, not the emitter: `replay` spends nothing, `live` would call
+ * a model. Keeping that split is what lets the whole control plane be demonstrated
+ * against real Linear at zero cost.
+ */
+const consumer = new Consumer({
+  store: events,
+  emitter: new LinearEmitter(() => tokens.getToken()?.accessToken),
+  worker: replayWorker(),
+});
+
+const POLL_MS = 2_000;
+let draining = false;
+
+const poll = setInterval(() => {
+  // Never let two drains overlap — a slow worker would otherwise stack timers.
+  if (draining || !tokens.getToken()) return;
+  draining = true;
+  consumer
+    .drain()
+    .then((n) => { if (n) console.log(`processed ${n} event(s)`); })
+    // A failed emit must not take the process down; the row is already settled.
+    .catch((err) => console.error("consumer error:", err instanceof Error ? err.message : err))
+    .finally(() => { draining = false; });
+}, POLL_MS);
+
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
     console.log(`${sig} received, closing`);
+    clearInterval(poll);
     server.close(() => { events.close(); tokens.close(); process.exit(0); });
   });
 }

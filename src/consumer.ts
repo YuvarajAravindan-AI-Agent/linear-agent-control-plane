@@ -64,12 +64,21 @@ export class Consumer {
 
     // FIRST, before anything slow. Ephemeral so the next activity replaces it
     // rather than leaving "Picking this up..." in the transcript forever.
-    await this.opts.emitter.emit({
-      sessionId,
-      type: "thought",
-      body: "Picking this up and planning the work.",
-      ephemeral: true,
-    });
+    //
+    // If this throws — a bad token, a wrong mutation shape — the row must not be
+    // left in `running`, or requeueStale is the only thing that ever frees it and
+    // the session sits at "Working..." with no explanation in between.
+    try {
+      await this.opts.emitter.emit({
+        sessionId,
+        type: "thought",
+        body: "Picking this up and planning the work.",
+        ephemeral: true,
+      });
+    } catch (err) {
+      this.opts.store.settle(row.id, "failed");
+      throw err;
+    }
 
     try {
       const result = await this.opts.worker(event);

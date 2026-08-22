@@ -146,3 +146,23 @@ describe("consumer", () => {
     assert.equal(seen[0]!.action, "prompted");
   });
 });
+
+describe("emitter failure must not strand the row", () => {
+  test("a throwing holding-emit settles as failed instead of leaving it running", async () => {
+    const store = new EventStore(":memory:");
+    const emitter = {
+      async emit() { throw new Error("401 from Linear"); },
+    };
+    const consumer = new Consumer({
+      store, emitter,
+      worker: async () => ({ body: "unreachable", needsReview: false }),
+    });
+
+    queued(store, "boom");
+    await assert.rejects(() => consumer.step(), /401 from Linear/);
+
+    assert.equal(store.count("running"), 0,
+      "a stranded row is only freed by requeueStale — the session sits at Working... until then");
+    assert.equal(store.count("failed"), 1);
+  });
+});
