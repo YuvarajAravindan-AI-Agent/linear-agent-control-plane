@@ -378,6 +378,16 @@ presence avoids inventing a label or custom field a human could set inconsistent
 The graph is built and validated **before** anything is written to Linear, so a cycle fails
 as a parse error rather than as four orphaned sub-issues someone cleans up by hand.
 
+`epic()` persists the resulting graph via `graphstore.ts`, keyed by the epic's identifier.
+`leaf()` reads it back by parsing a `Work package \`X\` of EPIC-N.` line out of the sub-issue's
+own description — the only place that link exists — then branches on the event's `action`:
+`created` dispatches a `ready` package and opens its review; `prompted` reads the human's
+reply and merges or fails it. Every state that isn't the one being acted on (`blocked`,
+already `dispatched`/`merged`/`failed`, a review reply for something not `awaitingGate`) is
+reported honestly rather than silently redone or guessed at. Typed against `LinearLike`
+(`linear.ts`), not the concrete client — a class's private fields make it unsatisfiable by a
+plain fake object, which is what made this logic untestable before.
+
 ### `oauth.ts` / `tokens.ts` — installing as an app user
 
 `actor=app` is the parameter the whole integration depends on. Without it the token acts as
@@ -428,11 +438,20 @@ erDiagram
         TEXT state PK "64 hex"
         INTEGER created_at
     }
+    EPIC_GRAPHS {
+        TEXT epic_identifier PK "e.g. YUV-6"
+        TEXT epic_issue_id
+        TEXT data "JSON: PackageRecord[] + pkgId to sub-issue ref map"
+        INTEGER updated_at
+    }
 ```
 
-Three tables, one file, WAL mode. `oauth_tokens` is constrained to a single row
+Four tables, one file, WAL mode. `oauth_tokens` is constrained to a single row
 (`CHECK id = 1`) — one workspace, one installation; re-installing replaces rather than
-accumulates.
+accumulates. `epic_graphs` is keyed by the epic's human-readable identifier rather than its
+UUID, because that identifier is the only thing a sub-issue's description actually carries
+(see `decompose.ts`'s work-package ref line) — the UUID was never available to look the row
+back up with.
 
 ---
 
@@ -451,7 +470,7 @@ accumulates.
 
 ## 8. Testing strategy
 
-**87 tests, no network, no API keys, no model calls.** Runs on `node:test` with zero test
+**135 tests, no network, no API keys, no model calls.** Runs on `node:test` with zero test
 dependencies.
 
 The tests worth naming are the ones encoding a failure that would otherwise be invisible:
@@ -466,9 +485,15 @@ The tests worth naming are the ones encoding a failure that would otherwise be i
 | 5,000-deep dependency chain | Stack overflow from recursive cycle detection |
 | Script tag through an issue identifier | XSS on the status page |
 | Consumer killed mid-run recovers | A stranded row leaving the session at "Working…" |
+| Approving a review posts to the *epic*, not just the session | The unblocked set being visible nowhere a founder would look |
+| A rejected package leaves its dependents blocked | A rejection silently behaving like a merge |
+| Re-assigning a merged package reports its state, not a redo | Double-processing outside the queue's own dedupe |
+| A graph reload sees a prior process's writes | State that only ever existed in the request that built it |
 
 **Not covered by tests:** `LinearEmitter` and `LinearClient` are thin adapters over the live
-API. They were verified by running against a real workspace, not by tests.
+API. They were verified by running against a real workspace, not by tests. `worker.ts`'s
+decision logic (dispatch, review, unblock) is fully covered against a fake satisfying
+`LinearLike` — see Gap 1 below for why that interface exists.
 
 ---
 
@@ -476,14 +501,61 @@ API. They were verified by running against a real workspace, not by tests.
 
 Also stated in the [README](../README.md) and [RUNBOOK](../RUNBOOK.md).
 
-### Gap 1 — the orchestrator is not driven by real Linear transitions
+### ~~Gap 1 — the orchestrator is not driven by real Linear transitions~~ — CLOSED
 
-The most significant one. `graph.ts`, `gate.ts` and `orchestrator.ts` are correct and tested,
-but exercised by tests rather than by Linear. **Approving a gate in Linear does not unblock
-dependents.** The graph lives in memory during one decomposition and is then discarded.
+`graph.ts` and `gate.ts` were always correct and tested; what was missing was persistence.
+`epic()` built a `DependencyGraph` and a pkgId → sub-issue map, then both fell out of scope
+when the function returned — the next webhook delivery had no memory of either, so "approve"
+could never reach a `merge()` call.
 
-*To close it:* persist the graph alongside issue ids, subscribe to issue-state webhooks, and
-map Linear transitions onto `merge()` and `fail()`.
+**What actually closed it, and why it differs from the plan above:** the original note said
+subscribe to issue-state webhooks. That turned out to be the wrong channel — `eventKey()` in
+`receiver.ts` derives its dedupe key from `agentSession.id`, so a raw `Issue`-update webhook
+carries no session to key on and would need its own parallel ingress path, duplicating the
+5s/10s-budgeted machinery that already exists. Instead this reuses the **AgentSessionEvent**
+flow the app is already wired for: assigning a work package's sub-issue fires a `created`
+event (dispatch), and replying to the review it opens fires a `prompted` event (approve or
+reject) — both already flow through the same receiver, queue and consumer as everything else.
+
+**The mechanism:**
+- [`src/graphstore.ts`](../src/graphstore.ts) persists `DependencyGraph.all()` — the same
+  `PackageRecord[]` the graph already produces — plus the pkgId → sub-issue `{id, identifier}`
+  map, keyed by the epic's **identifier** (e.g. `YUV-6`), in a fourth SQLite table alongside
+  events and OAuth state.
+- `DependencyGraph.rehydrate()` (`graph.ts`) rebuilds a live graph from those records,
+  re-running edge validation so corrupted data fails loudly rather than misbehaving silently,
+  then restoring real per-package state.
+- The **only** link from a Linear sub-issue back to that persisted graph is one line in its
+  description — `` Work package `X` of YUV-6. `` — written by `epic()` and read by `leaf()`
+  via `formatWorkPackageRef`/`parseWorkPackageRef` (`decompose.ts`). Dependencies live in
+  Linear as `blocks` relations, not as a queryable field, so there is no way to ask Linear
+  which package a sub-issue is; this line is what stands in for that.
+- `worker.ts`'s `leaf()` is now action-aware: `created` dispatches a `ready` package and opens
+  its review; `prompted` reads the reply (anything not recognised as a rejection defaults to
+  approval, since a bare "lgtm" must count) and merges or fails it. A merge that unblocks
+  something posts a comment on the **epic**, not just the session — visible from wherever a
+  founder is actually looking, not buried in one sub-issue's own transcript.
+- Every state that isn't the happy path is reported honestly rather than guessed at:
+  assigning a still-`blocked` package names what it's waiting on; assigning something already
+  `dispatched`/`merged`/`failed` reports that instead of silently redoing work; a review reply
+  for a package that is not `awaitingGate` is answered with its real state and nothing is
+  mutated.
+
+**What this closes, precisely — and what it does not:** `graph.ts`'s and `gate.ts`'s
+transition primitives (`dispatch`, `openGate`, `merge`, `fail`) are now driven by real Linear
+events, which is the specific, observable claim this gap was about. **`Orchestrator` itself —
+`tick()`/`drain()`, the concurrency cap, the spend ceiling — is still not wired into
+production.** It doesn't need to be for what's built: dispatch here is *pull*, one package at
+a time, each triggered by a human explicitly assigning a sub-issue, so there is no autonomous
+loop pushing multiple ready packages out that a concurrency cap would need to bound. Those caps
+start mattering the moment dispatch becomes push-based — e.g. Gap 3 auto-assigning every
+`ready` package the instant it unblocks — and `Orchestrator` is already built and tested for
+that day; it just isn't the code path anything currently calls.
+
+Two smaller things replay mode still doesn't do: there is no failure path — dispatch always
+reaches the review gate, because nothing exists yet that can actually fail (that's Gap 3,
+`live` mode, not this one) — and the escalation half of `gate.ts`, `sweep()`, is tested but
+not scheduled anywhere in `main.ts`; see the Runbook's Known Gaps.
 
 ### ~~Gap 2 — no OAuth token refresh~~ — CLOSED
 

@@ -24,6 +24,29 @@ export class UnknownDependencyError extends Error {
 export class DependencyGraph {
   private records = new Map<string, PackageRecord>();
 
+  /**
+   * Rebuild a graph from previously-persisted records, restoring real state
+   * rather than recomputing it from scratch.
+   *
+   * Re-runs edge validation (unknown deps, cycles) so corrupted persisted data
+   * fails loudly here rather than misbehaving silently later — the packages
+   * themselves are immutable, only their states travel with the record. States
+   * are then overwritten wholesale from the record: they reflect actual history
+   * (a package that was dispatched and gated stays that way), not something to
+   * re-derive from `merged` edges alone.
+   */
+  static rehydrate(records: PackageRecord[]): DependencyGraph {
+    const g = new DependencyGraph(records.map((r) => r.pkg));
+    for (const r of records) {
+      const rec = g.get(r.pkg.id);
+      rec.state = r.state;
+      rec.dispatchedAt = r.dispatchedAt;
+      rec.gateOpenedAt = r.gateOpenedAt;
+      rec.escalatedAt = r.escalatedAt;
+    }
+    return g;
+  }
+
   constructor(packages: WorkPackage[]) {
     for (const pkg of packages) {
       if (this.records.has(pkg.id)) {

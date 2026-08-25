@@ -1,5 +1,23 @@
+/**
+ * The subset of LinearClient the orchestration logic in worker.ts actually
+ * calls. Extracted as an interface — rather than typing against the concrete
+ * class — so tests can hand it a plain fake object instead of a real client
+ * wired to a fetch stub; a class's private fields make it structurally
+ * unsatisfiable by an object literal, an interface's do not.
+ */
+export interface LinearLike {
+  issue(id: string): Promise<{
+    id: string; identifier: string; title: string;
+    description?: string; teamId: string; parentId?: string;
+  }>;
+  createSubIssue(input: { teamId: string; parentId: string; title: string; description?: string }):
+    Promise<{ id: string; identifier: string }>;
+  addBlockedBy(issueId: string, relatedIssueId: string): Promise<void>;
+  comment(issueId: string, body: string): Promise<void>;
+}
+
 /** Minimal Linear GraphQL client — only the operations the control plane needs. */
-export class LinearClient {
+export class LinearClient implements LinearLike {
   constructor(
     private getToken: () => string | undefined,
     private endpoint = "https://api.linear.app/graphql",

@@ -1,7 +1,9 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-import { parseWorkPackages, defaultWorkPackages } from "../src/decompose.js";
+import {
+  parseWorkPackages, defaultWorkPackages, formatWorkPackageRef, parseWorkPackageRef,
+} from "../src/decompose.js";
 import { DependencyGraph, CycleError } from "../src/graph.js";
 import { EventStore } from "../src/store.js";
 import { renderStatus } from "../src/status.js";
@@ -104,5 +106,32 @@ describe("status page", () => {
   test("an empty queue reads as guidance, not as an error", () => {
     const html = renderStatus(new EventStore(":memory:"), { installed: true, mode: "replay", now: 1 });
     assert.match(html, /Delegate an issue to the agent/);
+  });
+});
+
+describe("work package ref — the only link back from a sub-issue to its graph", () => {
+  test("format and parse round-trip", () => {
+    const line = formatWorkPackageRef("B", "YUV-6");
+    assert.deepEqual(parseWorkPackageRef(line), { pkgId: "B", epicIdentifier: "YUV-6" });
+  });
+
+  test("parses the ref out of a full sub-issue description, blocked-by line and all", () => {
+    const description = formatWorkPackageRef("D", "YUV-6") + "\n\nBlocked by: B, C";
+    assert.deepEqual(parseWorkPackageRef(description), { pkgId: "D", epicIdentifier: "YUV-6" });
+  });
+
+  test("a package id with punctuation still parses", () => {
+    const line = formatWorkPackageRef("pkg-1.2_a", "ENG-42");
+    assert.deepEqual(parseWorkPackageRef(line), { pkgId: "pkg-1.2_a", epicIdentifier: "ENG-42" });
+  });
+
+  test("a hand-written sub-issue with no ref line parses to undefined, not a crash", () => {
+    assert.equal(parseWorkPackageRef("Just do the thing, thanks."), undefined);
+    assert.equal(parseWorkPackageRef(undefined), undefined);
+    assert.equal(parseWorkPackageRef(""), undefined);
+  });
+
+  test("does not match a similar-looking sentence that isn't the exact ref line", () => {
+    assert.equal(parseWorkPackageRef("This work package relates to YUV-6 somehow."), undefined);
   });
 });

@@ -56,3 +56,31 @@ export function defaultWorkPackages(): WorkPackage[] {
     { id: "D", title: "UI wiring", dependsOn: ["B", "C"] },
   ];
 }
+
+/**
+ * The line written into a sub-issue's description that ties it back to its
+ * package id and parent epic — and the parser that reads it back.
+ *
+ * This is the only link between a Linear sub-issue and the persisted
+ * DependencyGraph: dependencies live in Linear as `blocks` relations (see
+ * LinearClient.addBlockedBy), not as a queryable field, so there is no way to
+ * ask Linear "which work package is this and which epic does it belong to."
+ * Write and parse are kept in one place so they cannot drift apart.
+ */
+const WORK_PACKAGE_REF_LINE = /^Work package `([A-Za-z0-9_.-]+)` of ([A-Za-z][A-Za-z0-9]*-\d+)\.$/m;
+
+export interface WorkPackageRef {
+  pkgId: string;
+  epicIdentifier: string;
+}
+
+export function formatWorkPackageRef(pkgId: string, epicIdentifier: string): string {
+  return `Work package \`${pkgId}\` of ${epicIdentifier}.`;
+}
+
+export function parseWorkPackageRef(description: string | undefined): WorkPackageRef | undefined {
+  if (!description) return undefined;
+  const m = WORK_PACKAGE_REF_LINE.exec(description);
+  if (!m) return undefined;
+  return { pkgId: m[1]!, epicIdentifier: m[2]! };
+}

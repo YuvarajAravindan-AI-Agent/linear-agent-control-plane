@@ -1,11 +1,13 @@
 import { EventStore } from "./store.js";
 import { TokenStore } from "./tokens.js";
+import { GraphStore } from "./graphstore.js";
 import { startApp } from "./app.js";
 import { LinearEmitter } from "./activity.js";
 import { Consumer } from "./consumer.js";
 import { replayWorker } from "./worker.js";
 import { LinearClient } from "./linear.js";
 import { TokenRefresher } from "./refresh.js";
+import type { GateConfig } from "./gate.js";
 
 /**
  * Service entrypoint: webhook ingress plus the OAuth install endpoints.
@@ -41,6 +43,16 @@ const mode = process.env.MODE ?? "replay";
 
 const events = new EventStore(dbPath);
 const tokens = new TokenStore(dbPath);
+const graphs = new GraphStore(dbPath);
+
+// No human-directory feature exists yet, so there is exactly one reviewer,
+// named by env var. GateConfig's SLA/escalation machinery is exercised by
+// gate.test.ts but nothing here schedules a sweep() call in production yet —
+// that is the next increment, not this one.
+const gateConfig: GateConfig = {
+  slaMs: Number(process.env.GATE_SLA_MS ?? 24 * 60 * 60_000),
+  humans: [{ id: process.env.GATE_REVIEWER_ID ?? "founder", role: "reviewer" }],
+};
 
 // A consumer killed mid-run leaves its event in `running` forever, and the Linear
 // session ages into `stale` with no explanation. Recovery is a startup concern.
@@ -100,7 +112,7 @@ const linear = new LinearClient(() => tokens.getToken()?.accessToken);
 const consumer = new Consumer({
   store: events,
   emitter: new LinearEmitter(() => tokens.getToken()?.accessToken),
-  worker: replayWorker(linear),
+  worker: replayWorker(linear, graphs, gateConfig),
 });
 
 /**
@@ -150,6 +162,6 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     console.log(`${sig} received, closing`);
     clearInterval(poll);
     clearInterval(refreshTimer);
-    server.close(() => { events.close(); tokens.close(); process.exit(0); });
+    server.close(() => { events.close(); tokens.close(); graphs.close(); process.exit(0); });
   });
 }

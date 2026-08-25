@@ -57,6 +57,21 @@ existing token is kept. That is Linear being unreachable, not an uninstall — n
 **Events arrive but nothing happens**
 Check the token exists (`/healthz`) — the poll loop skips entirely when there is none.
 
+**Assigning a work package replies "No decomposition state is on file"**
+The sub-issue's description carries a `Work package \`X\` of EPIC-N.` line that is the *only*
+link back to the persisted graph (dependencies live in Linear as `blocks` relations, not as a
+readable field — see `decompose.ts`). This fires when that epic key doesn't resolve: the
+`data/` volume was reset, or the sub-issue predates this feature. Re-decomposing the epic
+rebuilds tracking for it; a sub-issue created by hand with no ref line gets a generic reply
+instead of an error — see "not part of the tracked decomposition" for the other half of this.
+
+**A review reply doesn't seem to do anything**
+Check the package's actual state on `/status` or in the epic's sub-issue list. Approval only
+acts when the package is `awaitingGate`; a reply to anything else (already merged, still
+blocked, a stray duplicate) is answered honestly with its current state and nothing is
+mutated. This is deliberate — see "re-assigning an already-merged package" style tests in
+`worker.test.ts`.
+
 **Duplicate work**
 Should be impossible: dedupe is keyed on `session:action:timestamp` and stored in SQLite, so
 it survives restarts. If you see it, check that `data/` is a persistent volume and not being
@@ -89,13 +104,14 @@ rsynced from the laptop. **A deploy key is the proper fix and has not been done.
 
 - **`live` mode does not exist.** `MODE=live` is read and reported but there is no model in
   the loop; the worker is always the replay one. Decomposition is a *parser*, not a planner.
-- **The orchestrator is not wired to Linear state.** `graph.ts`, `gate.ts` and
-  `orchestrator.ts` are tested and correct, but dispatch/merge is driven by tests, not by
-  real issue transitions. Approving a gate in Linear does not currently unblock dependents.
-- **Notifications route by role in code only.** No Slack, email or Linear notification
-  configuration is wired.
+- **Notifications route by role in code only.** `ReviewGate.open()`/`sweep()` compute who
+  should be told, but nothing delivers it — no Slack, email or Linear notification is sent.
+  The only visible signal today is the comment `handleReview` posts on the epic when a merge
+  unblocks something.
 - **SLA escalation is not scheduled.** `ReviewGate.sweep()` is correct and tested but nothing
-  calls it on a timer in the running service.
+  calls it on a timer in the running service — `main.ts` never constructs a long-lived gate to
+  sweep, since each webhook delivery loads, mutates and persists its epic's graph independently
+  (see below). A stalled review currently sits open indefinitely with no follow-up.
 
 ## Security notes
 

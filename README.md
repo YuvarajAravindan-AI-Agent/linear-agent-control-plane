@@ -53,11 +53,11 @@ selects the *worker*, not the emitter, and why the default mode is free.
 
 ## What is actually verified
 
-`npm test` — **87 tests, no network, no API keys, no model calls.**
+`npm test` — **135 tests, no network, no API keys, no model calls.**
 
 ```
 p99=13.1ms  median=4.4ms      # handler latency vs Linear's 5000ms budget
-tests 87 | pass 87 | fail 0
+tests 135 | pass 135 | fail 0
 ```
 
 Verified live against a real workspace: unsigned `POST /webhook` → 401, correctly signed →
@@ -86,6 +86,13 @@ fails as a parse error, not as four orphaned sub-issues someone cleans up by han
 In replay mode the decomposition is a **parser, not a planner**. That is deliberate: it is
 the one part that genuinely needs a model, so replay mode reads a spec you wrote rather than
 inventing one.
+
+**Closing the loop:** assign a ready sub-issue to the app user and it dispatches the real
+package and opens a review. Reply to that review — anything not read as a rejection counts as
+approval — and it merges, and a comment lands on the *epic* naming whatever just became
+dispatchable. The graph this runs against is [persisted](src/graphstore.ts), keyed by the
+epic's identifier, so it survives past the request that decomposed it; that used to be exactly
+what was missing.
 
 ## Endpoints
 
@@ -139,7 +146,9 @@ Architecture, HLD/LLD with diagrams and alternatives considered: [docs/DESIGN.md
 - [x] Founder-readable progress at `/status`
 - [x] Runbook
 - [x] OAuth token refresh — renewed automatically inside the 60s expiry skew, with backoff
-- [ ] Orchestrator wired to real Linear transitions — approving a gate does not yet unblock dependents
+- [x] Orchestrator wired to real Linear transitions — assigning a package dispatches it,
+  approving a review merges it and unblocks dependents, against a graph that survives past
+  the request that built it
 - [ ] `live` mode — a model in the loop
 
 ## What this does not prove
@@ -148,10 +157,11 @@ It does not prove operating this against a large production codebase with a real
 team. It proves the control plane, the dispatch semantics, the review gate and the failure
 handling.
 
-The orchestrator, dependency graph and escalation logic in `graph.ts`, `gate.ts` and
-`orchestrator.ts` are correct and tested, but are **not yet driven by real Linear state
-transitions** — approving a gate in Linear does not currently unblock dependents. That gap
-is listed in the roadmap and in the runbook rather than papered over.
+Assigning a ready sub-issue now dispatches the real, persisted work package, and approving
+its review really does merge it and unblock dependents — see [`src/graphstore.ts`](src/graphstore.ts)
+and [`src/worker.ts`](src/worker.ts). What replay mode still does not do is call a model or
+open a real PR: dispatch always "succeeds" and goes straight to review, because there is
+nothing that can fail yet. That is Gap 3 (`live` mode), not this one.
 
 ## Answered along the way
 
