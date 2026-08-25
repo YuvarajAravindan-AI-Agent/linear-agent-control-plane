@@ -485,10 +485,31 @@ dependents.** The graph lives in memory during one decomposition and is then dis
 *To close it:* persist the graph alongside issue ids, subscribe to issue-state webhooks, and
 map Linear transitions onto `merge()` and `fail()`.
 
-### Gap 2 — no OAuth token refresh
+### ~~Gap 2 — no OAuth token refresh~~ — CLOSED
 
-Access tokens last 24 hours. A refresh token is stored and `isExpired()` exists with a
-60-second skew, but nothing calls either.
+Access tokens last 24 hours. `TokenRefresher` (`src/refresh.ts`) is ticked once a minute by
+the service loop and renews the token inside `isExpired()`'s 60-second skew, so a call never
+starts on a live token and lands on a dead one.
+
+The token is consumed through a *synchronous* getter — `() => tokens.getToken()?.accessToken`
+is handed to `LinearClient` and `LinearEmitter` at construction — so refreshing could not
+happen lazily at the call site without making that getter async and rippling through both
+clients, their constructors and their tests. Refreshing ahead of time on a timer keeps every
+consumer untouched.
+
+Three behaviours are worth naming because each is a bug that would otherwise appear a day
+late and look unrelated to its cause:
+
+- **The refresh token is carried forward when the response omits one.** Linear does not
+  guarantee a rotated refresh token; storing `undefined` would convert a recoverable 24-hour
+  expiry into a permanent uninstall on the *following* day.
+- **A rejected grant (400/401) clears the install; a 5xx or dropped socket does not.** The
+  first is Linear saying the credential is dead, and keeping the row would make `/healthz`
+  answer `installed:true` while every API call 401s. The second is a transient outage, where
+  discarding a still-usable token would be self-inflicted damage. Failures back off
+  exponentially (60s doubling to a 15-minute cap) rather than retrying every tick.
+- **Concurrent ticks cannot both refresh.** `oauth_tokens` is a single-row table, so two
+  racing writers could persist a token the winner had already superseded.
 
 ### Gap 3 — `live` mode does not exist
 

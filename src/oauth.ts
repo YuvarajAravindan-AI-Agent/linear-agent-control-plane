@@ -97,3 +97,76 @@ export async function exchangeCode(
     scope: Array.isArray(parsed.scope) ? parsed.scope.join(",") : (parsed.scope ?? ""),
   };
 }
+
+/**
+ * Trade a refresh token for a fresh access token.
+ *
+ * Linear's access tokens last 24h, which means an install left alone overnight is
+ * dead by morning — the failure mode this exists to remove is a demo that opens by
+ * re-running the install flow in front of whoever is watching.
+ *
+ * `previous` is required rather than optional because of the trap below: the
+ * response is not guaranteed to carry a new refresh token, and treating an absent
+ * one as `undefined` silently discards the only credential that can refresh again.
+ * That converts a recoverable 24h expiry into a permanent uninstall, one day later,
+ * with nothing in the logs connecting the two.
+ */
+export async function refreshAccessToken(
+  cfg: OAuthConfig,
+  previous: StoredToken,
+  now: number = Date.now(),
+  doFetch: FetchLike = globalThis.fetch as unknown as FetchLike,
+): Promise<StoredToken> {
+  if (!previous.refreshToken) {
+    throw new TokenExchangeError(0, "stored token has no refresh_token — reinstall required");
+  }
+
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: previous.refreshToken,
+    client_id: cfg.clientId,
+    client_secret: cfg.clientSecret,
+  }).toString();
+
+  const res = await doFetch(TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  const text = await res.text();
+  if (!res.ok) throw new TokenExchangeError(res.status, text);
+
+  let parsed: TokenResponse;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new TokenExchangeError(res.status, `non-JSON response: ${text}`);
+  }
+
+  if (!parsed.access_token) {
+    throw new TokenExchangeError(res.status, "response contained no access_token");
+  }
+
+  return {
+    accessToken: parsed.access_token,
+    // Carry the old refresh token forward when the response omits one.
+    refreshToken: parsed.refresh_token ?? previous.refreshToken,
+    expiresAt: parsed.expires_in ? now + parsed.expires_in * 1000 : undefined,
+    // Same reasoning for scope: an omitted scope means unchanged, not empty.
+    scope: Array.isArray(parsed.scope)
+      ? parsed.scope.join(",")
+      : (parsed.scope ?? previous.scope),
+  };
+}
+
+/**
+ * A refresh failure is not automatically fatal — a 500 or a dropped connection is
+ * worth retrying, while a 400/401 means Linear has rejected the grant itself and no
+ * amount of retrying will help. Only the latter should surface as "not installed".
+ */
+export function isUnrecoverableRefreshError(err: unknown): boolean {
+  if (!(err instanceof TokenExchangeError)) return false;
+  // status 0 is the local "no refresh token stored" case above.
+  return err.status === 0 || err.status === 400 || err.status === 401;
+}

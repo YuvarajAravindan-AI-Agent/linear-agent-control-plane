@@ -5,6 +5,7 @@ import { LinearEmitter } from "./activity.js";
 import { Consumer } from "./consumer.js";
 import { replayWorker } from "./worker.js";
 import { LinearClient } from "./linear.js";
+import { TokenRefresher } from "./refresh.js";
 
 /**
  * Service entrypoint: webhook ingress plus the OAuth install endpoints.
@@ -102,6 +103,33 @@ const consumer = new Consumer({
   worker: replayWorker(linear),
 });
 
+/**
+ * Token upkeep.
+ *
+ * Linear access tokens last 24h. Left alone, an install goes dead overnight and the
+ * next thing anyone sees is a demo that has to start by reinstalling the app. The
+ * refresher runs on its own interval rather than inside the drain loop because the
+ * two have unrelated cadences — the queue is polled every 2s, whereas a token needs
+ * looking at roughly once a minute.
+ */
+const refresher = new TokenRefresher({
+  tokens,
+  oauth: { clientId, clientSecret, redirectUri: `${baseUrl}/oauth/callback` },
+});
+
+const REFRESH_CHECK_MS = 60_000;
+const refreshTimer = setInterval(() => {
+  refresher
+    .tick()
+    // tick() already classifies and logs; this only catches a genuinely unexpected
+    // throw, which must not take the service down.
+    .catch((err) => console.error("refresher error:", err instanceof Error ? err.message : err));
+}, REFRESH_CHECK_MS);
+
+// Don't wait a full minute after boot to notice an already-expired token — the
+// common case for a box that has been off overnight.
+void refresher.tick().catch(() => { /* logged inside tick */ });
+
 const POLL_MS = 2_000;
 let draining = false;
 
@@ -121,6 +149,7 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
     console.log(`${sig} received, closing`);
     clearInterval(poll);
+    clearInterval(refreshTimer);
     server.close(() => { events.close(); tokens.close(); process.exit(0); });
   });
 }

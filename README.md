@@ -138,8 +138,8 @@ Architecture, HLD/LLD with diagrams and alternatives considered: [docs/DESIGN.md
 - [x] Human "understanding review" gate (`elicitation` → `awaitingInput`) on stock Linear
 - [x] Founder-readable progress at `/status`
 - [x] Runbook
+- [x] OAuth token refresh — renewed automatically inside the 60s expiry skew, with backoff
 - [ ] Orchestrator wired to real Linear transitions — approving a gate does not yet unblock dependents
-- [ ] OAuth token refresh — tokens last 24h; the refresh token is stored but unused
 - [ ] `live` mode — a model in the loop
 
 ## What this does not prove

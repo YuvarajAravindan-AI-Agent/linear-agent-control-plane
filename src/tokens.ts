@@ -119,6 +119,17 @@ export class TokenStore {
     };
   }
 
+  /**
+   * Drop the stored token.
+   *
+   * Used when Linear rejects the refresh grant outright: at that point the install
+   * is gone and keeping the row would make `/healthz` report `installed:true` while
+   * every API call 401s. A health check that lies is worse than one that says no.
+   */
+  clearToken(): void {
+    this.db.prepare("DELETE FROM oauth_tokens WHERE id = 1").run();
+  }
+
   /** Treat a token as expired slightly early, so a call cannot start on a live token
    *  and land on a dead one. */
   isExpired(now: number = Date.now(), skewMs = 60_000): boolean {

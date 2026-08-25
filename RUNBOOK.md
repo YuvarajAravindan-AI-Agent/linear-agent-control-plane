@@ -45,8 +45,14 @@ The signing secret in `.env` no longer matches Linear. Compare shapes: the signi
 into the wrong line and nothing warns you.
 
 **`installed:false` after it was working**
-Access tokens last **24 hours**. There is a refresh token stored but **automatic refresh is
-not implemented** — see Known gaps. Re-run `/oauth/authorize`.
+Access tokens last **24 hours** and are refreshed automatically about a minute before expiry,
+so this should no longer happen on its own. When it does, the refresh grant was rejected
+outright (a 400/401 — revoked app, rotated client secret) and the install was cleared
+deliberately so `/healthz` would not report an install that 401s on every call. The log line
+says so: `token refresh rejected (...) — install cleared`. Re-run `/oauth/authorize`.
+
+A *transient* failure looks different: `token refresh failed (...); retrying in Ns` and the
+existing token is kept. That is Linear being unreachable, not an uninstall — no action needed.
 
 **Events arrive but nothing happens**
 Check the token exists (`/healthz`) — the poll loop skips entirely when there is none.
@@ -81,9 +87,6 @@ rsynced from the laptop. **A deploy key is the proper fix and has not been done.
 
 ## Known gaps — read before promising anything
 
-- **Token refresh is not implemented.** A refresh token is stored and `isExpired()` exists,
-  but nothing calls it. After 24 hours you must re-authorize by hand. This is the first
-  thing to fix.
 - **`live` mode does not exist.** `MODE=live` is read and reported but there is no model in
   the loop; the worker is always the replay one. Decomposition is a *parser*, not a planner.
 - **The orchestrator is not wired to Linear state.** `graph.ts`, `gate.ts` and
